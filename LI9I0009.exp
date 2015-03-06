@@ -1,0 +1,72 @@
+#AdvCfgTool.sh -a "MOD ims/cscf/pcscf System.AccessNetworks \"where Network='xDSL'\" LI_Capable_PCSCF=0 LI_Capable=0"
+#AdvCfgTool.sh -e "LISTCNFINST ims/cscf/pcscf System.AccessNetworks"
+#AdvCfgTool.sh -e SET  ims/cscf/srv Srv.StrippedSessionInfoHeaderGeneration=TRUE
+
+
+#==============================================================================
+# Author:      Radek Zetik, radek.zetik@siemens.com, Martin Kucinsky martin.kucinsky@siemens.com
+# Description: Testcase for Lawful interception - information exange
+# Border is simulated
+#
+# (c) 2009 Siemens AG
+#==============================================================================
+
+benRequireLibrary iit.common.lib TestbedConfiguration 
+benRequireModule ts.common config
+benRequireLibrary ts.common.lib Li
+set liSesName LI9I0009 
+
+proc testcase_exit {} {
+  benStep [liCloseSession $liSesName] "Closing LI session"
+}
+
+#=============================================================================
+# Setting of LI
+
+benStep [liOpenSession $liSesName $H_DESCRIPTOR $IP_ADDRESS $IP_PORT '$KEY_PATH_REMOTE/$PRIVATE_K' '$KEY_PATH_REMOTE/$PUBLIC_K'] "Opening session between CSCF and UTIMACO"
+
+if { $RUN_STEP > 0 } {
+  benRequireModule iit.data AN/05_Emergency_calls_for_FT/common/hsconfig/HssSubscribersConfiguration
+  benRequireLibrary iit.common.lib HssSubscribersConfiguration
+  benRequireLibrary iit.common.lib HssSubscribersGeneration
+  benRequireLibrary iit.common.lib TestcaseUtilities
+  benRequireLibrary ts.common.lib LiIRI
+
+  benStep [tcuRecreateStcWorkingDirectory] "Recreating stc working directory"
+  benStep [tcuCreateStcConfigurationFile] "Generating stc configuration file"
+  benStep [tcuCreateStcSubscribersFile "USERPSTN USEREMERGENCY" "USER1 USER2"] "Generating stc subscribers file"
+
+  benRequireLibrary iit.common.lib Bash
+  benRequireLibrary iit.common.lib SimpleUtilities
+  benRequireLibrary iit.common.lib TestbedConfiguration
+
+
+  #==============================================================================
+  set liCountOfIRIFiles [liCountOfIRIFiles]  
+  benLoggerLog info "IRI files found: $liCountOfIRIFiles"
+
+  if {[liCountOfIRIFiles] < 1} {
+     benStep [benStatusCreateError "Failed"] "Testing IRI aggregation"
+  }
+  benStep [benStatusCreateSuccess] "Testing IRI aggregation"
+
+  liIRIAddUser [list "USERPSTN" 1]
+  liIRIAddUser [list "USEREMERGENCY" 1]
+  liSetIRIFilter [list "INVITE" "200 OK/INVITE"]
+  liIRIInitialize [list $liSedCommandIgnoreCorrNr $liSedCommandIgnoreLskpmcNr $liSedCommandIgnorePrivHdr] $liSesName 
+
+  if {[liCompareIRITemplate 01] > 0 } {
+     benStep [benStatusCreateError "Failed"] "Testing tickets"
+  }
+  benStep [benStatusCreateSuccess] "Testing tickets"
+
+  benExit
+}
+
+benStep [liSetOn $liSesName] "Turn LI on the CSCF on"
+benStep [liDeleteAll $liSesName] "Cleaning the database"
+benStep [liAddTarget $liSesName [list "sip:+4205003215010@[tbcGetTestbedProperties {ims_domain}]" 135 ] ] "Adding public id for user A into LI Target"
+benStep [liAddTarget $liSesName [list "sip:112@[tbcGetTestbedProperties {ims_domain}]" 137 ] ] "Adding public id for user A into LI Target"
+benStep [liAddTarget $liSesName [list "tel:112" 136 ] ] "Adding public id for user A into LI Target"
+benStep [liAddTarget $liSesName [list "sip:@@@@@" 000191 ] ] "Adding tracing id into LI Target"
+
