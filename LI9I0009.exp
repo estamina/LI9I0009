@@ -1,72 +1,172 @@
-#AdvCfgTool.sh -a "MOD ims/cscf/pcscf System.AccessNetworks \"where Network='xDSL'\" LI_Capable_PCSCF=0 LI_Capable=0"
-#AdvCfgTool.sh -e "LISTCNFINST ims/cscf/pcscf System.AccessNetworks"
-#AdvCfgTool.sh -e SET  ims/cscf/srv Srv.StrippedSessionInfoHeaderGeneration=TRUE
-
-
-#==============================================================================
-# Author:      Radek Zetik, radek.zetik@siemens.com, Martin Kucinsky martin.kucinsky@siemens.com
-# Description: Testcase for Lawful interception - information exange
-# Border is simulated
-#
-# (c) 2009 Siemens AG
+#=============================================================================
+# Author:  Marcel Lakatos (SIEMENS PSE ECT MSP4; SLOVAKIA; marcel.lakatos@siemens.com)
+# TC name: AN5I0201
+# Description: IIT: INVITE on P-CSCF(originating side)
+#                   Forwarding Emergency Requests of registered user to E-CSCF
+# Update for IMS 6.1: Miroslav Jelinek (ANF DATA TMM MMA78; miroslav.jelinek@siemens.com)
 #==============================================================================
 
-benRequireLibrary iit.common.lib TestbedConfiguration 
+benRequireModule ts.common hsconfig/HssSubscribersConfiguration
+benRequireLibrary iit.common.lib HssSubscribersConfiguration
+benRequireLibrary iit.common.lib TestcaseUtilities
+benRequireLibrary iit.common.lib TestbedUtilities
+benRequireLibrary iit.common.lib SipTestClient
+
+benRequireLibrary iit.common.lib AdvCfgTool
+benRequireLibrary ts.common.lib AN05
+
+benRequireLibrary iit.common.lib TspCli
 benRequireModule ts.common config
 benRequireLibrary ts.common.lib Li
-set liSesName LI9I0009 
+benRequireLibrary ts.common.lib LiIRI
+set S_DESC LI9I0009 
+set MACHINE cscf
+set EXEC_CLASS admin
 
-proc testcase_exit {} {
-  benStep [liCloseSession $liSesName] "Closing LI session"
+global OMIT_RESTORE
+global OMIT_SET
+global STC_AS
+
+if { [info exists STC_AS] && $STC_AS } {
+	set asHost stc
+} else {
+	set asHost as_sim
 }
 
-#=============================================================================
-# Setting of LI
+# define subscribers to be from FIX network
+set user1 "USERPSTN"
+set user2 "USEREMERGENCY"
+set user3 "AS_LRF"
+set KGW_ip "[hscGet $user1 ip_address]"
+set access_network xDSL
+set port_for_KGW 5066
+set port_ECSCF 5091
 
-benStep [liOpenSession $liSesName $H_DESCRIPTOR $IP_ADDRESS $IP_PORT '$KEY_PATH_REMOTE/$PRIVATE_K' '$KEY_PATH_REMOTE/$PUBLIC_K'] "Opening session between CSCF and UTIMACO"
+set generated_users "$user1 $user2 $user3"
 
-if { $RUN_STEP > 0 } {
-  benRequireModule iit.data AN/05_Emergency_calls_for_FT/common/hsconfig/HssSubscribersConfiguration
-  benRequireLibrary iit.common.lib HssSubscribersConfiguration
-  benRequireLibrary iit.common.lib HssSubscribersGeneration
-  benRequireLibrary iit.common.lib TestcaseUtilities
-  benRequireLibrary ts.common.lib LiIRI
+# emergency user on Mg interface - setting
+set MgcfName "sip:[hscGet $user2 ip_address]:[hscGet $user2 port]"
 
-  benStep [tcuRecreateStcWorkingDirectory] "Recreating stc working directory"
-  benStep [tcuCreateStcConfigurationFile] "Generating stc configuration file"
-  benStep [tcuCreateStcSubscribersFile "USERPSTN USEREMERGENCY" "USER1 USER2"] "Generating stc subscribers file"
-
-  benRequireLibrary iit.common.lib Bash
-  benRequireLibrary iit.common.lib SimpleUtilities
-  benRequireLibrary iit.common.lib TestbedConfiguration
+set number_type "emergency"
+set number_value "112"
 
 
-  #==============================================================================
-  set liCountOfIRIFiles [liCountOfIRIFiles]  
-  benLoggerLog info "IRI files found: $liCountOfIRIFiles"
 
-  if {[liCountOfIRIFiles] < 1} {
-     benStep [benStatusCreateError "Failed"] "Testing IRI aggregation"
-  }
-  benStep [benStatusCreateSuccess] "Testing IRI aggregation"
+###################### LI Settup ################
 
-  liIRIAddUser [list "USERPSTN" 1]
-  liIRIAddUser [list "USEREMERGENCY" 1]
-  liSetIRIFilter [list "INVITE" "200 OK/INVITE"]
-  liIRIInitialize [list $liSedCommandIgnoreCorrNr $liSedCommandIgnoreLskpmcNr $liSedCommandIgnorePrivHdr] $liSesName 
+proc NoComment {} { 
+	benStep [actOpenSession my_ACT_Session1 cscf] "Opening ACT session on CSCF ... "
+  	benStep [actUpdateScalar my_ACT_Session1 "ims/cscf/srv" "Srv.StrippedSessionInfoHeaderGeneration" "TRUE" -cmdMode e] "Setting Srv.StrippedSessionInfoHeaderGeneration" 
+	benStep [actCloseSession my_ACT_Session1] "Closing ACT session on CSCF ... "
 
-  if {[liCompareIRITemplate 01] > 0 } {
-     benStep [benStatusCreateError "Failed"] "Testing tickets"
-  }
-  benStep [benStatusCreateSuccess] "Testing tickets"
-
-  benExit
+	benStep [tspOpenSession tsp_session cscf] "Opening TSP session on CSCF ... "
+	benStep [tspStopProcessGroup tsp_session IMS_G_SCSCF] "Stopping process group IMS_G_SRV ... "
+	benStep [tspStopProcessGroup tsp_session IMS_COMMON_PROXY] "Stopping process group IMS_SRV_PROXY ... "
+	benStep [tspStartProcessGroup tsp_session IMS_COMMON_PROXY] "Starting process group IMS_SRV_PROXY ... "
+	benStep [tspStartProcessGroup tsp_session IMS_G_SCSCF] "Starting process group IMS_G_SRV ... "
+	benStep [tspCloseSession tsp_session] "Closing TSP session to CSCF ... "
 }
 
-benStep [liSetOn $liSesName] "Turn LI on the CSCF on"
-benStep [liDeleteAll $liSesName] "Cleaning the database"
-benStep [liAddTarget $liSesName [list "sip:+4205003215010@[tbcGetTestbedProperties {ims_domain}]" 135 ] ] "Adding public id for user A into LI Target"
-benStep [liAddTarget $liSesName [list "sip:112@[tbcGetTestbedProperties {ims_domain}]" 137 ] ] "Adding public id for user A into LI Target"
-benStep [liAddTarget $liSesName [list "tel:112" 136 ] ] "Adding public id for user A into LI Target"
-benStep [liAddTarget $liSesName [list "sip:@@@@@" 000191 ] ] "Adding tracing id into LI Target"
+#NoComment
 
+benStep [liOpenSession $S_DESC $H_DESCRIPTOR $IP_ADDRESS $IP_PORT '$KEY_PATH_REMOTE$PRIVATE_K' '$KEY_PATH_REMOTE$PUBLIC_K'] "Opening session between CSCF and UTIMACO"
+benStep [liSetOn $S_DESC] "Turn LI on the CSCF on"
+benStep [liDeleteAll $S_DESC] "Cleaning the database"
+set user1_public_id [hscGet $user1 public_id]
+set user2_public_id [hscGet $user2 public_id]
+benStep [liAddTarget $S_DESC [list $user1_public_id 135 ] ] "Adding $user1 ($user1_public_id) into LI DB ... "
+benStep [liAddTarget $S_DESC [list $user2_public_id 136 ] ] "Adding $user2 ($user2_public_id) into LI DB ... "
+benStep [liAddTarget $S_DESC [list "sip:@@@@@" 000123 ] ] "Adding user for tracing into LI Target"
+####################################################################################################################
+
+
+# change configuration parameters
+benStep [actOpenSession pcscfActSession pcscf] "Opening AdvCfgTool session to pcscf machine ... "
+benStep [actOpenSession scscfActSession scscf] "Opening ACT session on CSCF ... "
+
+if { ![info exists OMIT_RESTORE] } {
+	benExitAddCallback {ANrestAllScalars Y}
+	benStep [ANsaveAllScalars] "Save All Scalars"
+
+	benExitAddCallback {ANrestPhoneNumbersTable N}
+
+	benExitAddCallback {ANrestoreForcedList}
+	benStep [ANcreaForcedListSavePoint] "Creating savepoint of OperatorService.ForcedList table"
+
+	benExitAddCallback {ANrestAccessNetworkRange Y}
+}
+                                  
+if { ![info exists OMIT_SET] } {
+	benStep [ANinsPhoneNumbersTable "$MgcfName" "$number_value" "sip" "audio" "$number_type" N] "Insert PhoneNumbersTable"
+	
+	# change configuration parameters
+	benStep [tbcQuerySipProperty testbed1.scscf mw_name -ptrValue scscf_mw_name] "Getting scscf MW name"
+	benStep [actUpdateScalar pcscfActSession "ims/cscf/pcscf" "System.EcscfUri" "sip:$scscf_mw_name:$port_ECSCF" -cmdMode a] "Setting new value of scalar configuration parameter System.EcscfUri "
+
+	benStep [actRemoveRow scscfActSession "ims/cscf/scscf" "OperatorService.ForcedList" "Priority='5'" -cmdMode a] "Deletion of row from configuration parameter table OperatorService.ForcedList"
+
+	benStep [actAddRow scscfActSession "ims/cscf/scscf" "OperatorService.ForcedList" "Priority='5' ApplServerAddress='sip:[hscGet $user1 as_ip]:[hscGet $user1 as_port]' TriggerPoints='<TriggerPoint><ConditionTypeCNF>0</ConditionTypeCNF><SPT><Group>0</Group><SIPHeader><Header>Route</Header><Content>\"$scscf_mw_name:$port_ECSCF\"</Content></SIPHeader></SPT></TriggerPoint>' DefaultHandling='c'" -cmdMode a] "Insertion of new row into configuration parameter table OperatorService.ForcedList"
+
+	# all used users will be from xDSL network
+	#benStep [ANmakeRange $KGW_ip] "Define range of ip addreses" <-- this does't work, I do not know why
+	set ip_range $KGW_ip/24
+ 	benStep [ANinsAccessNetworkRange $access_network $ip_range N] "Set access network ranges"
+
+	ANSleep 59
+}
+
+# define properties wanted in subscribers.inc file
+set subscriber_properties "-properties { name home sip_name public_id private_id tel ip_address port http_digest_key as_ip as_port}"
+
+    #benStep [tcuRecreateStcWorkingDirectory] "Recreating stc working directory"
+benStep [tcuCreateStcConfigurationFile] "Generating stc configuration file"
+benStep [tcuCreateStcSubscribersFile $generated_users $generated_users $subscriber_properties] "Generating stc subscribers file"
+
+# parameters which will be used in *.sip files
+set global_siptc_params "-D PCSCF_PRT=\"$port_for_KGW\" -D lcORIG=\"$user1\" -D lcTERM=\"$user2\" -D lcTERM2=\"$user3\""
+
+benStep [stcOpenSession myStcSession1] "Opening originating stc session"
+benStep [stcOpenSession myStcSession2 -host $asHost ] "Opening terminating stc session"
+benStep [stcOpenSession asStcSession -host $asHost ] "Opening AS_LRF stc session"
+
+
+benStep [stcRun myStcSession2 [benInfo tc.name]_B.sip [hscGet $user2 ip_address] [hscGet $user2 port] -siptpAdditionalArgs $global_siptc_params] "Running terminating stc program"
+benStep [stcRun myStcSession1 [benInfo tc.name]_A.sip [hscGet $user1 ip_address] [hscGet $user1 port] -siptpExecuteTimeout 90 -siptpAdditionalArgs $global_siptc_params] "Running originating stc program"
+benStep [stcRun asStcSession [benInfo tc.name]_as.sip [hscGet $user1 as_ip] [hscGet  $user1 as_port] -siptpAdditionalArgs $global_siptc_params] "Running AS_LRF stc program"
+
+benStep [stcWaitForTimer myStcSession1 "ReadyTimer1_1"] "Waiting for originating sync timer"
+benStep [stcWaitForTimer myStcSession2 "ReadyTimer1_2"] "Waiting for terminating sync timer"
+benStep [stcWaitForTimer asStcSession "ReadyTimer1_AS"] "Waiting for AS sync timer"
+
+benStep [stcResume asStcSession] "Resume session AS_LRF"
+benStep [stcResume myStcSession2 ] "Resume session 2 (terminating)"
+
+# wait for 2sec to be sure that  terminating side is waiting for the message
+sleep 2
+benStep [stcResume myStcSession1 ] "Resume session 1 (originating)"
+
+benStep [stcWaitForSuccessfullExit myStcSession1] "Waiting for exit of originating stc program"
+benStep [stcWaitForSuccessfullExit myStcSession2] "Waiting for exit of terminating stc program"
+benStep [stcWaitForSuccessfullExit asStcSession] "Waiting for exit of AS_LRF stc program"
+
+benStep [stcCloseSession myStcSession1] "Closing originating stc session"
+benStep [stcCloseSession myStcSession2] "Closing terminating stc session"
+benStep [stcCloseSession asStcSession] "Closing AS_LRF stc session"
+
+#==============================================================================
+
+set liCountOfIRIFiles [liCountOfIRIFiles]
+benLoggerLog info "IRI files found: $liCountOfIRIFiles"
+
+if {$liCountOfIRIFiles < 3} {
+   benStep [benStatusCreateError "Failed"] "Testing IRI aggregation"
+}
+benStep [benStatusCreateSuccess] "Testing IRI aggregation"
+
+if {[liCompareTemplate $S_DESC 01 [list $liSedCommandIgnoreCorrNr $liSedCommandIgnoreLskpmcNr $liSedCommandIgnoreCorrId1 $liSedCommandIgnoreCorrId2  $liSedCommandIgnoreCorrId3] ] > 0 } {
+    benStep [benStatusCreateError "Failed"] "Testing tickets"
+}
+benStep [benStatusCreateSuccess] "Testing tickets"
+    
+    
+    
